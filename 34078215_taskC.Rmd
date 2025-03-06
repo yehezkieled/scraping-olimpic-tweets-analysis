@@ -1,0 +1,374 @@
+---
+title: "34078215_taskC"
+author: "Yehezkiel"
+date: "2024-05-22"
+output: html_document
+---
+
+# Install and Import Libraries
+```{r install libraries}
+# install.packages("tidytext")
+```
+```{r import libraries}
+library(tidyverse)
+library(lubridate)
+library(ggplot2)
+library(naniar)
+library(stringr)
+library(tm)
+library(textstem)
+library(tidytext)
+```
+
+Let's import the Tokyo Olympic 2021 data.
+```{r import data}
+tk_olim_df <- read.csv("Olympics_tweets.csv")
+head(tk_olim_df)
+print(colnames(tk_olim_df))
+str(tk_olim_df)
+```
+
+Let's check missing values.
+```{r missing values}
+miss_var_summary(tk_olim_df)
+tk_olim_df[is.na(tk_olim_df$user_created_at),]
+```
+It can be seen from the table that there are some missing data that needs to be remove for every plot.
+
+# 1.
+## 1.1
+Write code to produce a bar chart to visualise the number of Twitter accounts
+created across different years (Note: Please create the “year” column).
+Below are the steps to answer the following question:
+
+1. Change the data type of user_created_at to date object using lubridate and create a new column "year".
+
+2. Filter the data and remove the na values in user_created_at.
+
+3. Take distinct user_screen_name and year.
+
+4. Grouping by the distincted dataset by year and get the number of account created each year.
+
+5. Plot it using bar chart.
+
+```{r 1.1 answer}
+tk_olim_df <- tk_olim_df %>%
+  mutate(
+    user_created_at = dmy_hm(user_created_at), # change the "user_created_at" data type
+    year = year(user_created_at) # create new column called "year"
+  )
+
+tk_olim_user_df <- tk_olim_df %>%
+  filter(!is.na(user_created_at)) %>% # filter out the na in user_created_at
+  distinct(user_screen_name, year) # get the distinct values for user_screen_name and year
+
+tk_olim_user_df %>%
+  group_by(year) %>% # group by year
+  summarise(num_twitter_acc = n()) %>% # summarise year
+  ggplot(aes(x = year, y = num_twitter_acc)) + # plotting
+  geom_bar(stat = "identity") + 
+  labs(
+    title = "Number of Twitter Accounts Created Yearly", 
+    x = "Year", 
+    y = "Number of Twitter Accounts"
+  )
+```
+## 1.2
+
+For users whose accounts were generated after 2010, what is the average
+number of “user_followers” of these users for each year? Write code to produce
+a bar chart to visualise these average “user_followers” numbers across different
+years.
+Below are the steps to answer the question:
+
+1. Filter the dataframe using the "year > 2010".
+
+2. Summarise using "user_screen_name" and year" and get the average of "user_followers".
+
+3. Summarise one more time by "year" to get the average of "ave_user_fol".
+
+3. Plot the data using bar chart.
+
+```{r 1.2 answer}
+tk_olim_year_filter_df <- tk_olim_df %>%
+  filter(year > 2010) %>% # filter year
+  group_by(user_screen_name, year) %>% # group by year and user_screen_name
+  summarise(ave_user_fol = mean(user_followers)) %>% # calculate the average yearly for "user_followers"
+  group_by(year) %>% # group by year
+  summarise(ave_user_fol_yearly = mean(ave_user_fol)) # calculate the average of ave_user_fol
+  
+head(tk_olim_year_filter_df)
+
+# plotting
+ggplot(tk_olim_year_filter_df, aes(x = year, y = ave_user_fol_yearly)) +
+  geom_bar(stat = "identity") + 
+  labs(
+    title = "Average Number of User Followers Yearly", 
+    x = "Year", 
+    y = "Average Number of User Followers"
+  )
+```
+## 1.3
+
+Based on the two bar charts generated in Question 1.1 and Question 1.2, what
+observations can you make? Any potential explanations for your observations?
+
+For the first chart, there is a peak around the year 2010 which might indicates the popularity of Tweeter as a social media, after that the trend is going down. Another noticeable spike in 2020. This is due to the covid 19 pandemic, which forced people to download social media and one of them is Tweeter.
+
+The second chart agrees with the analysis for chart one in the year 2010, which indicates the rise of popularity of the Tweeter.
+
+The average number of followers for accounts created in the most recent years (2019 and onwards) is significantly lower. User that just created recently in average have smaller number of followers. while the twitter account that is created in early 2011 got followers accumulated from 2011 to 2021.
+
+## 1.4
+
+In addition to when those Twitter accounts were created, it might be worth
+further exploring where those Twitter users located. Please write code to count
+the occurrences of different location values (i.e., the column “user_location”)
+and display the top 10 most frequent location values. Are there any odd values
+observed in the top 10 most frequent locations? How many tweets are associated
+with these top 10 most frequent location values?
+Below are the steps to answer the question:
+
+1. Filter out the na value in the "user_location".
+
+2. Take disctinct values of user_screen_name and user_location
+
+3. Groupby by the user_location to get the numbe of user.
+
+4. Pick the top 10 location.
+
+5. Remove the odd values.
+
+6. Get the top location and filter the original dataset using the top locations.
+
+7. Calculate the number of distinct rows.
+
+```{r 1.4 answer}
+tk_olim_loc_df <- tk_olim_df %>%
+  filter(!is.na(user_location)) %>% # filter out the null values in the "user_location"
+  distinct(user_screen_name, user_location) %>%
+  group_by(user_location) %>% # group by user_location
+  summarise(number_of_user = n()) %>% # count the number of followers
+  arrange(desc(number_of_user))
+
+head(tk_olim_loc_df, 10)
+```
+The odd value is "she/her", some users might use the location field to display other information, such as pronouns or personal identifiers, resulting in entries like "she/her".
+
+```{r 1.4 answer cont}
+tk_olim_loc_df_cleaned <- tk_olim_loc_df %>%
+  filter(user_location != "she/her") %>%
+  top_n(10)
+
+# get the locations
+top_location <- tk_olim_loc_df_cleaned$user_location
+num_of_tweets_top_location <- tk_olim_df %>%
+  filter(user_location %in% top_location) %>% # filter according to the location
+  group_by(user_location) %>% # calculate the rows
+  summarise(num_of_tweet = n_distinct(id))
+  
+print(
+  paste(
+    "Number of Tweets that is associated with these top 10 most frequent location is ",
+    sum(num_of_tweets_top_location$num_of_tweet)
+  )
+)
+```
+# 2.
+## 2.1
+Please write code to produce a bar chart to visualise the number of tweets posted
+in different dates (e.g., “25/7/2021”) (Note: Please create the “date” column).
+Which date has the lowest number of tweets?
+Below are the steps to do the question:
+
+1. Filter out the null values in "date".
+
+2. Change the "date" format into "%d/%b/%Y".
+
+3. Groupby "date" to get the number of tweets daily.
+
+4. Change the data type back into date object, making sure the arrangement when plotting later.
+
+5. Plot the bar chart.
+
+6. Filter the date which has the lowest number of tweets.
+
+```{r 2.1 answer}
+tk_olim_date_df <- tk_olim_df %>%
+  filter(!is.na(date)) %>% # filter out the null values
+   mutate(
+     date = dmy_hm(date) %>%
+       format(format = "%d/%m/%Y") # change the date format
+   ) %>%
+  group_by(date) %>% # groupby date
+  summarise(number_of_tweet = n()) %>% # get the number of tweets daily
+  mutate(date = dmy(date)) %>% # change back the date format
+  arrange(date)
+
+head(tk_olim_date_df)
+
+#plotting
+ggplot(tk_olim_date_df, aes(x = date, y = number_of_tweet)) +
+  geom_bar(stat = "identity") +
+  labs(title = "Number of Tweets Daily",
+       x = "Date",
+       y = "Number of Tweets") +
+  scale_x_date(date_labels = "%d/%b/%Y", date_breaks = "1 day") + # rescale the x axis
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+print(
+  paste(
+    "The date which has the lowest number of tweets is: ",
+    strftime(
+      tk_olim_date_df[tk_olim_date_df$number_of_tweet == min(tk_olim_date_df$number_of_tweet),]$date,
+      format = "%d/%b/%Y"
+    )
+  )
+)
+```
+
+## 2.2
+Please write code to calculate the length of the text contained in each tweet
+(measured in characters) and produce a bar chart.
+Below are the steps to do this question:
+
+1. Filter out the null values.
+
+2. Make a new column "text_length" that indicates the length of each text.
+
+3. Make a new column "length_category" that indicates which category the text in.
+
+4. Groupby length_category to get the number of each category.
+
+5. Plot the bar chart.
+
+```{r 2.2 answer}
+tk_olim_text_len_df <- tk_olim_df %>%
+  filter(!is.na(text)) %>% # filter out the null values
+  mutate(
+    text_length = nchar(text), # create column that store the length of the text
+    length_category = cut(text_length, # categorized text_length
+       breaks = c(0, 41, 81, 121, 161, 201, 241, Inf),
+       labels = c("[1, 40]", "[41, 80]", "[81, 120]", "[121, 160]", "[161, 200]", "[201, 240]", ">= 241"),
+       right = FALSE)
+  ) %>% 
+  select(text_length, length_category) %>% # select only text_length and length_category
+  group_by(length_category) %>% # groupby the length_category
+  summarise(number_of_tweet = n()) # calculate the number of tweets per category
+
+print(tk_olim_text_len_df)
+
+# plot the bar plot
+ggplot(tk_olim_text_len_df, aes(x = length_category, y = number_of_tweet)) +
+  geom_bar(stat = "identity") +
+  labs(title = "Number of Tweets by Text Length",
+       x = "Tweet Length (characters)",
+       y = "Number of Tweets") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+## 2.3
+In Twitter, people often interact with one another by mentioning another
+account’s username, which is preceded by the "@" symbol (e.g., “Hello
+@TwitterSupport!”). How many tweets contain another account’s username in
+the dataset? Among the tweets containing another account’s username, how
+many of them contain at least three different accounts’ usernames?
+Below are the steps to answer the question:
+
+1. Get the distinct values of each row.
+
+2. Create a new column "mentions" to count the number of "@" follow with a word.
+
+3. Filter "mentions" more than 0 and at least 3.
+
+```{r 2.3 answer}
+# Identify tweets containing mentions
+tk_olim_mention_df <- tk_olim_df %>%
+  distinct(id, text, .keep_all = TRUE) %>%
+  mutate(mentions = str_count(text, "@\\w+"))
+
+# Count how many tweets contain at least one mention
+tweets_with_mentions <- tk_olim_mention_df %>%
+  filter(mentions > 0) %>%
+  nrow()
+
+# Identify tweets containing at least three different mentions
+tweets_with_three_mentions <- tk_olim_mention_df %>%
+  filter(mentions >= 3) %>%
+    nrow()
+
+print(
+  paste(
+    "There are ",
+    tweets_with_mentions, 
+    " Tweets that contain another account's username in the dataset."
+  )
+)
+
+print(
+  paste(
+    "Among the twets containing another account's username, there are ",
+    tweets_with_three_mentions,
+    " Tweets."
+  )
+)
+```
+
+## 2.4
+What are the top 20 most frequent terms in all tweets in the “text” column? Are
+there any stopwords among them? If yes, could you please identify the top 20
+most frequent terms which are not stopwords?
+Below are the steps to answer the question:
+
+1. Convert that text column into tibble for text processing.
+
+2. By using the tidytext library, tokennized each word, then count the occurrences.
+
+3. Get the top 20 terms
+
+4. Load the stop_words data and filtr the term_counts using the stop_words.
+
+5. Plot the top 20 terms with and without the stopwords.
+
+```{r 2.4 answer}
+# convert to tibble
+text_df <- tibble(text = tk_olim_df$text)
+
+term_counts <- text_df %>%
+  unnest_tokens(word, text) %>% # tokennized each word
+  count(word, sort = TRUE) # count the occurrences.
+
+# get the top 20 terms
+top_20_terms <- term_counts %>% top_n(20, n)
+print(top_20_terms)
+
+# Load stopwords
+data("stop_words")
+
+# filter the term_counts using the stop_words
+term_counts_no_stopwords <- term_counts %>%
+  filter(!word %in% stop_words$word)
+
+# get the top 20 terms without the stopwords
+top_20_terms_no_stopwords <- term_counts_no_stopwords %>% top_n(20, n)
+print(top_20_terms_no_stopwords)
+
+
+# Plot the top 20 most frequent terms
+ggplot(top_20_terms, aes(x = reorder(word, n), y = n)) +
+  geom_bar(stat = "identity") +
+  labs(title = "Top 20 Most Frequent Terms",
+       x = "Term",
+       y = "Frequency") +
+  coord_flip()
+
+# Plot the top 20 most frequent terms without stopwords
+ggplot(top_20_terms_no_stopwords, aes(x = reorder(word, n), y = n)) +
+  geom_bar(stat = "identity") +
+  labs(title = "Top 20 Most Frequent Terms (Without Stopwords)",
+       x = "Term",
+       y = "Frequency") +
+  coord_flip()
+```
+
+Yes, there are stopwords in the top 20 terms of the text, such as "the", "is", etc.

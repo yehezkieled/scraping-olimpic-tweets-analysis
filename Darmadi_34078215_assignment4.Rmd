@@ -1,0 +1,1322 @@
+---
+title: "34078215_assignment4"
+author: "Yehezkiel"
+date: "2024-06-01"
+output: html_document
+---
+
+# Task B
+
+## Import Libraries
+```{r import libraries Task B}
+library(rvest)
+library(lubridate)
+library(tidyverse)
+library(ggplot2)
+```
+## Task B1
+Extract table "Historical rankings" from the url below:
+https://en.wikipedia.org/wiki/ICC_Men%27s_T20I_Team_Rankings
+```{r scrap the historical rankings table}
+# store the wikipedia url
+t20i_url <- "https://en.wikipedia.org/wiki/ICC_Men%27s_T20I_Team_Rankings"
+
+# get the data
+t20i_page <- read_html(t20i_url)
+
+# specify the css selector
+css_selector <- "#mw-content-text > div.mw-content-ltr.mw-parser-output > table:nth-child(31)"
+
+# extract the historical ranking table
+t20i_hist_df <- html_element(t20i_page, css_selector) %>% html_table()
+print(t20i_hist_df)
+
+head(t20i_hist_df)
+tail(t20i_hist_df)
+```
+The table shows that the data needs to be pre-processed first.
+Things that need to be pre-processed:
+
+1. Last row of the dataset needs to be removed
+
+2. The Start and End columns, they need to be cleaned and the data type needs to be changed using lubridate
+
+3. The Duration column, remove the days using grepl
+
+```{r task B1 answer}
+# Function to clean the date strings
+clean_date <- function(date_str) {
+  date_str <- gsub("\\[.*?\\]", "", date_str)  # Remove any content in square brackets
+  date_str <- trimws(date_str)  # Remove leading and trailing whitespaces
+  return(date_str)
+}
+
+t20i_hist_summarised_df <- t20i_hist_df %>%
+  slice(-n()) %>% # Remove the last row
+  mutate(
+    Start = dmy(clean_date(Start)), # clean and change the data type of Start column
+    Duration = gsub(" days| day", "", Duration) %>% 
+      as.integer(),  # clean and change the data type of Duration column
+    Duration = ifelse(End == "Present", as.integer(Sys.Date() - Start), Duration),
+    End = ifelse(End == "Present", format(Sys.Date(), "%d %B %Y"), End) %>% 
+      clean_date() %>% 
+      dmy() # clean and change the data type of End column
+  ) %>%
+  group_by(Country) %>% # grouping by the Country
+  summarise(
+    "Earliest_start" = min(Start), # Get the Ealiest start date
+    "Latest_end" = max(End), # Get the Latest end date
+    "Average_duration" = round(mean(Duration), 2) # Get the average duration
+  ) %>%
+  arrange(desc(Average_duration)) # Sort that data according to the average duration
+
+print(t20i_hist_summarised_df)
+```
+
+## Task B2
+We are going to analyse the top 100 largest companies in Europe by revenue.
+The url is as below:
+https://en.wikipedia.org/wiki/List_of_largest_companies_in_Europe_by_revenue
+```{r scrape the data}
+# store the wikipedia url
+large_company_url <- "https://en.wikipedia.org/wiki/List_of_largest_companies_by_revenue"
+
+# get the data
+large_company_page <- read_html(large_company_url)
+
+# extract the historical ranking table
+large_company_df <- html_table(large_company_page)[[1]]
+print(large_company_df)
+
+head(large_company_df)
+tail(large_company_df)
+```
+
+We are going to analyse the biggest industry in the world according to the top company contributor in revenue. Before that, let's do wrangling on the data.
+```{r wrangling task B2}
+large_company_final_df <- large_company_df %>%
+  slice(-1) %>%
+  mutate(
+    Revenue = gsub("[$,]", "", Revenue) %>% as.integer()
+  ) %>%
+  rename(HQ = `Headquarters[note 1]`)%>%
+  select(Industry, Revenue, HQ) %>%
+  group_by(Industry, HQ) %>%
+  summarise("MeanRevenue" = mean(Revenue)) %>% 
+  ungroup() 
+  
+
+large_company_final_df
+```
+
+Let's analyse the top 7 Industry.
+Let's plot the data using bar chart.
+```{r task B2 plot}
+# filter the large_company_final_df
+top_7_industry <- large_company_df %>%
+  slice(-1) %>%
+  mutate(
+    Revenue = gsub("[$,]", "", Revenue) %>% as.integer()
+  ) %>%
+  rename(HQ = `Headquarters[note 1]`)%>%
+  group_by(Industry) %>%
+  summarise("MeanRevenue" = mean(Revenue)) %>%
+  top_n(7, MeanRevenue) %>%
+  select(Industry)
+
+large_company_final_df <- large_company_final_df %>%
+  semi_join(top_7_industry, by = "Industry") %>%
+  mutate(Industry = reorder(Industry, MeanRevenue, sum))
+
+ggplot(large_company_final_df, aes(x = Industry, y = MeanRevenue, fill = HQ)) +
+  geom_bar(stat = "identity", position = "stack", color = "black") +
+  labs(title = "Mean Revenue by Industry and HQ",
+       x = "Industry",
+       y = "Mean Revenue",
+       fill = "HQ") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 10))
+```
+The plot shows the mean revenue by industry and headquarters (HQ) for the world's largest companies, based on the Fortune Global 500 2023 rankings. It features a stacked bar chart with industries along the x-axis and mean revenue on the y-axis, using different colors to represent company HQs.
+
+Oil and Gas leads with the highest mean revenue, dominated by companies from Saudi Arabia and China. Electronics, Electricity, and Commodities follow, with significant contributions from China, South Korea, Taiwan, and the United States. Retail, Healthcare, and Information Technology have lower mean revenues but prominently feature American companies.
+
+The chart highlights the global distribution of these top companies, showing a strong presence of American firms across various industries and notable contributions from Asian and European companies in specific sectors. This aligns with the Fortune Global 500 trend, where 20 of the largest companies are American, 19 are Asian, and 11 are European.
+
+# Task C
+## Task C
+```{r install libraries Task C}
+# install.packages("tidytext")
+```
+```{r import libraries Task C}
+library(tidyverse)
+library(lubridate)
+library(ggplot2)
+library(naniar)
+library(stringr)
+library(tm)
+library(textstem)
+library(tidytext)
+```
+### Install and Import Libraries
+
+
+Let's import the Tokyo Olympic 2021 data.
+```{r import data Task C}
+tk_olim_df <- read.csv("Olympics_tweets.csv")
+head(tk_olim_df)
+print(colnames(tk_olim_df))
+str(tk_olim_df)
+```
+
+Let's check missing values.
+```{r missing values Task C}
+miss_var_summary(tk_olim_df)
+tk_olim_df[is.na(tk_olim_df$user_created_at),]
+```
+It can be seen from the table that there are some missing data that needs to be remove for every plot.
+
+## 1.
+### 1.1
+Write code to produce a bar chart to visualise the number of Twitter accounts
+created across different years (Note: Please create the “year” column).
+Below are the steps to answer the following question:
+
+1. Change the data type of user_created_at to date object using lubridate and create a new column "year".
+
+2. Filter the data and remove the na values in user_created_at.
+
+3. Take distinct user_screen_name and year.
+
+4. Grouping by the distincted dataset by year and get the number of account created each year.
+
+5. Plot it using bar chart.
+
+```{r 1.1 answer}
+tk_olim_df <- tk_olim_df %>%
+  mutate(
+    user_created_at = dmy_hm(user_created_at), # change the "user_created_at" data type
+    year = year(user_created_at) # create new column called "year"
+  )
+
+tk_olim_user_df <- tk_olim_df %>%
+  filter(!is.na(user_created_at)) %>% # filter out the na in user_created_at
+  distinct(user_screen_name, year) # get the distinct values for user_screen_name and year
+
+tk_olim_user_df %>%
+  group_by(year) %>% # group by year
+  summarise(num_twitter_acc = n()) %>% # summarise year
+  ggplot(aes(x = year, y = num_twitter_acc)) + # plotting
+  geom_bar(stat = "identity") + 
+  labs(
+    title = "Number of Twitter Accounts Created Yearly", 
+    x = "Year", 
+    y = "Number of Twitter Accounts"
+  )
+```
+### 1.2
+
+For users whose accounts were generated after 2010, what is the average
+number of “user_followers” of these users for each year? Write code to produce
+a bar chart to visualise these average “user_followers” numbers across different
+years.
+Below are the steps to answer the question:
+
+1. Filter the dataframe using the "year > 2010".
+
+2. Summarise using "user_screen_name" and year" and get the average of "user_followers".
+
+3. Summarise one more time by "year" to get the average of "ave_user_fol".
+
+3. Plot the data using bar chart.
+
+```{r 1.2 answer}
+tk_olim_year_filter_df <- tk_olim_df %>%
+  filter(year > 2010) %>% # filter year
+  group_by(user_screen_name, year) %>% # group by year and user_screen_name
+  summarise(ave_user_fol = mean(user_followers)) %>% # calculate the average yearly for "user_followers"
+  group_by(year) %>% # group by year
+  summarise(ave_user_fol_yearly = mean(ave_user_fol)) # calculate the average of ave_user_fol
+  
+head(tk_olim_year_filter_df)
+
+# plotting
+ggplot(tk_olim_year_filter_df, aes(x = year, y = ave_user_fol_yearly)) +
+  geom_bar(stat = "identity") + 
+  labs(
+    title = "Average Number of User Followers Yearly", 
+    x = "Year", 
+    y = "Average Number of User Followers"
+  )
+```
+### 1.3
+
+Based on the two bar charts generated in Question 1.1 and Question 1.2, what
+observations can you make? Any potential explanations for your observations?
+
+For the first chart, there is a peak around the year 2010 which might indicates the popularity of Tweeter as a social media, after that the trend is going down. Another noticeable spike in 2020. This is due to the covid 19 pandemic, which forced people to download social media and one of them is Tweeter.
+
+The second chart agrees with the analysis for chart one in the year 2010, which indicates the rise of popularity of the Tweeter.
+
+The average number of followers for accounts created in the most recent years (2019 and onwards) is significantly lower. User that just created recently in average have smaller number of followers. while the twitter account that is created in early 2011 got followers accumulated from 2011 to 2021.
+
+### 1.4
+In addition to when those Twitter accounts were created, it might be worth
+further exploring where those Twitter users located. Please write code to count
+the occurrences of different location values (i.e., the column “user_location”)
+and display the top 10 most frequent location values. Are there any odd values
+observed in the top 10 most frequent locations? How many tweets are associated
+with these top 10 most frequent location values?
+Below are the steps to answer the question:
+
+1. Filter out the na value in the "user_location".
+
+2. Take disctinct values of user_screen_name and user_location
+
+3. Groupby by the user_location to get the numbe of user.
+
+4. Pick the top 10 location.
+
+5. Remove the odd values.
+
+6. Get the top location and filter the original dataset using the top locations.
+
+7. Calculate the number of distinct rows.
+
+```{r 1.4 answer}
+tk_olim_loc_df <- tk_olim_df %>%
+  filter(!is.na(user_location)) %>% # filter out the null values in the "user_location"
+  distinct(user_screen_name, user_location) %>%
+  group_by(user_location) %>% # group by user_location
+  summarise(number_of_user = n()) %>% # count the number of followers
+  arrange(desc(number_of_user))
+
+head(tk_olim_loc_df, 10)
+```
+The odd value is "she/her", some users might use the location field to display other information, such as pronouns or personal identifiers, resulting in entries like "she/her".
+
+```{r 1.4 answer cont}
+tk_olim_loc_df_cleaned <- tk_olim_loc_df %>%
+  filter(user_location != "she/her") %>%
+  top_n(10)
+
+# get the locations
+top_location <- tk_olim_loc_df_cleaned$user_location
+num_of_tweets_top_location <- tk_olim_df %>%
+  filter(user_location %in% top_location) %>% # filter according to the location
+  group_by(user_location) %>% # calculate the rows
+  summarise(num_of_tweet = n_distinct(id))
+  
+print(
+  paste(
+    "Number of Tweets that is associated with these top 10 most frequent location is ",
+    sum(num_of_tweets_top_location$num_of_tweet)
+  )
+)
+```
+
+## 2.
+### 2.1
+Please write code to produce a bar chart to visualise the number of tweets posted
+in different dates (e.g., “25/7/2021”) (Note: Please create the “date” column).
+Which date has the lowest number of tweets?
+Below are the steps to do the question:
+
+1. Filter out the null values in "date".
+
+2. Change the "date" format into "%d/%b/%Y".
+
+3. Groupby "date" to get the number of tweets daily.
+
+4. Change the data type back into date object, making sure the arrangement when plotting later.
+
+5. Plot the bar chart.
+
+6. Filter the date which has the lowest number of tweets.
+
+```{r 2.1 answer}
+tk_olim_date_df <- tk_olim_df %>%
+  filter(!is.na(date)) %>% # filter out the null values
+   mutate(
+     date = dmy_hm(date) %>%
+       format(format = "%d/%m/%Y") # change the date format
+   ) %>%
+  group_by(date) %>% # groupby date
+  summarise(number_of_tweet = n()) %>% # get the number of tweets daily
+  mutate(date = dmy(date)) %>% # change back the date format
+  arrange(date)
+
+head(tk_olim_date_df)
+
+#plotting
+ggplot(tk_olim_date_df, aes(x = date, y = number_of_tweet)) +
+  geom_bar(stat = "identity") +
+  labs(title = "Number of Tweets Daily",
+       x = "Date",
+       y = "Number of Tweets") +
+  scale_x_date(date_labels = "%d/%b/%Y", date_breaks = "1 day") + # rescale the x axis
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+print(
+  paste(
+    "The date which has the lowest number of tweets is: ",
+    strftime(
+      tk_olim_date_df[tk_olim_date_df$number_of_tweet == min(tk_olim_date_df$number_of_tweet),]$date,
+      format = "%d/%b/%Y"
+    )
+  )
+)
+```
+
+### 2.2
+Please write code to calculate the length of the text contained in each tweet
+(measured in characters) and produce a bar chart.
+Below are the steps to do this question:
+
+1. Filter out the null values.
+
+2. Make a new column "text_length" that indicates the length of each text.
+
+3. Make a new column "length_category" that indicates which category the text in.
+
+4. Groupby length_category to get the number of each category.
+
+5. Plot the bar chart.
+
+```{r 2.2 answer}
+tk_olim_text_len_df <- tk_olim_df %>%
+  filter(!is.na(text)) %>% # filter out the null values
+  mutate(
+    text_length = nchar(text), # create column that store the length of the text
+    length_category = cut(text_length, # categorized text_length
+       breaks = c(0, 41, 81, 121, 161, 201, 241, Inf),
+       labels = c("[1, 40]", "[41, 80]", "[81, 120]", "[121, 160]", "[161, 200]", "[201, 240]", ">= 241"),
+       right = FALSE)
+  ) %>% 
+  select(text_length, length_category) %>% # select only text_length and length_category
+  group_by(length_category) %>% # groupby the length_category
+  summarise(number_of_tweet = n()) # calculate the number of tweets per category
+
+print(tk_olim_text_len_df)
+
+# plot the bar plot
+ggplot(tk_olim_text_len_df, aes(x = length_category, y = number_of_tweet)) +
+  geom_bar(stat = "identity") +
+  labs(title = "Number of Tweets by Text Length",
+       x = "Tweet Length (characters)",
+       y = "Number of Tweets") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+### 2.3
+In Twitter, people often interact with one another by mentioning another
+account’s username, which is preceded by the "@" symbol (e.g., “Hello
+@TwitterSupport!”). How many tweets contain another account’s username in
+the dataset? Among the tweets containing another account’s username, how
+many of them contain at least three different accounts’ usernames?
+Below are the steps to answer the question:
+
+1. Get the distinct values of each row.
+
+2. Create a new column "mentions" to count the number of "@" follow with a word.
+
+3. Filter "mentions" more than 0 and at least 3.
+
+```{r 2.3 answer}
+# Identify tweets containing mentions
+tk_olim_mention_df <- tk_olim_df %>%
+  distinct(id, text, .keep_all = TRUE) %>%
+  mutate(mentions = str_count(text, "@\\w+"))
+
+# Count how many tweets contain at least one mention
+tweets_with_mentions <- tk_olim_mention_df %>%
+  filter(mentions > 0) %>%
+  nrow()
+
+# Identify tweets containing at least three different mentions
+tweets_with_three_mentions <- tk_olim_mention_df %>%
+  filter(mentions >= 3) %>%
+    nrow()
+
+print(
+  paste(
+    "There are ",
+    tweets_with_mentions, 
+    " Tweets that contain another account's username in the dataset."
+  )
+)
+
+print(
+  paste(
+    "Among the twets containing another account's username, there are ",
+    tweets_with_three_mentions,
+    " Tweets."
+  )
+)
+```
+
+### 2.4
+What are the top 20 most frequent terms in all tweets in the “text” column? Are
+there any stopwords among them? If yes, could you please identify the top 20
+most frequent terms which are not stopwords?
+Below are the steps to answer the question:
+
+1. Convert that text column into tibble for text processing.
+
+2. By using the tidytext library, tokennized each word, then count the occurrences.
+
+3. Get the top 20 terms
+
+4. Load the stop_words data and filtr the term_counts using the stop_words.
+
+5. Plot the top 20 terms with and without the stopwords.
+
+```{r 2.4 answer}
+# convert to tibble
+text_df <- tibble(text = tk_olim_df$text)
+
+term_counts <- text_df %>%
+  unnest_tokens(word, text) %>% # tokennized each word
+  count(word, sort = TRUE) # count the occurrences.
+
+# get the top 20 terms
+top_20_terms <- term_counts %>% top_n(20, n)
+print(top_20_terms)
+
+# Load stopwords
+data("stop_words")
+
+# filter the term_counts using the stop_words
+term_counts_no_stopwords <- term_counts %>%
+  filter(!word %in% stop_words$word)
+
+# get the top 20 terms without the stopwords
+top_20_terms_no_stopwords <- term_counts_no_stopwords %>% top_n(20, n)
+print(top_20_terms_no_stopwords)
+
+
+# Plot the top 20 most frequent terms
+ggplot(top_20_terms, aes(x = reorder(word, n), y = n)) +
+  geom_bar(stat = "identity") +
+  labs(title = "Top 20 Most Frequent Terms",
+       x = "Term",
+       y = "Frequency") +
+  coord_flip()
+
+# Plot the top 20 most frequent terms without stopwords
+ggplot(top_20_terms_no_stopwords, aes(x = reorder(word, n), y = n)) +
+  geom_bar(stat = "identity") +
+  labs(title = "Top 20 Most Frequent Terms (Without Stopwords)",
+       x = "Term",
+       y = "Frequency") +
+  coord_flip()
+```
+
+Yes, there are stopwords in the top 20 terms of the text, such as "the", "is", etc.
+
+# Task D
+## Install and Import libraries
+```{r install libraries TaskD}
+# install.packages("rpart")
+# install.packages("rpart.plot")
+# install.packages("randomForest")
+# install.packages("corrplot")
+# install.packages("e1071")
+```
+```{r import libraries TaskD}
+library(tidyverse)
+library(ggplot2)
+library(naniar)
+library(lubridate)
+library(rpart)
+library(rpart.plot)
+library(randomForest)
+library(corrplot)
+library(caret)
+library(GGally)
+library(tm)
+library(textstem)
+library(e1071)
+```
+## Import the data
+Let's import all of the data.
+```{r import data TaskD}
+# import the dialogue usefulness data
+dial_useful_tr <- read.csv("dialogue_usefulness_train.csv")
+dial_useful_ts <- read.csv("dialogue_usefulness_test.csv")
+dial_useful_vl <- read.csv("dialogue_usefulness_validation.csv")
+
+# import the dialogue utterance data
+dial_utter_tr <- read.csv("dialogue_utterance_train.csv")
+dial_utter_ts <- read.csv("dialogue_utterance_test.csv")
+dial_utter_vl <- read.csv("dialogue_utterance_validation.csv")
+```
+
+## Data Exploration
+Let's explore the data for a bit.
+```{r missing values}
+miss_var_summary(dial_useful_tr)
+miss_var_summary(dial_useful_vl)
+
+miss_var_summary(dial_utter_tr)
+miss_var_summary(dial_utter_vl)
+```
+The data is cleaned, meaning that there is no missing data.
+
+```{r dial_useful explore}
+str(dial_useful_tr)
+head(dial_useful_tr)
+```
+```{r dial_utter explore}
+str(dial_utter_tr)
+head(dial_utter_tr)
+```
+
+## Question 1
+Feature engineering:
+
+1. Number of Question each ID
+
+2. Number of Answer each ID
+
+3. Number of Question-Answer pairing (might be decimal if there is more question or answer). This could serve as an outlier later.
+
+4. Number of distinct days that the student asks FLORA.
+
+5. Number of Q-A pairing each distinct days (Number of Q-A/ distinct days).
+
+6. Average answer text length.
+
+7. Average question text length.
+
+8. Top 5 most common words overall.
+
+```{r feature engineering}
+Q_A_feat_eng_func <- function(utter_df){
+  return(
+    utter_df %>%
+      group_by( # groupby ID and type of dialogue
+        Dialogue_ID..Annonymised., 
+        Interlocutor..either.Chatbot.or.Student.
+      ) %>%
+      summarise(
+        no_rows = n() # get the count of each type of dialogue
+      ) %>%
+      pivot_wider( # make it into columns
+        names_from = Interlocutor..either.Chatbot.or.Student., 
+        values_from = no_rows
+      ) %>%
+      rename( # change the column names
+        no_chatbot = Chatbot,
+        no_student = Student
+      ) %>%
+      mutate( # if there are ID that doesnt have either of Chatbot or ask
+        no_chatbot = ifelse(is.na(no_chatbot), 0, no_chatbot),
+        no_student = ifelse(is.na(no_student), 0, no_student)
+      )
+  )
+}
+# get the data from the dial_utter dfs
+dial_utter_Q_A_tr <- Q_A_feat_eng_func(dial_utter_tr)
+dial_utter_Q_A_ts <- Q_A_feat_eng_func(dial_utter_ts)
+dial_utter_Q_A_vl <- Q_A_feat_eng_func(dial_utter_vl)
+
+
+QA_days_weight_feat_eng_func <- function(utter_df){
+  return(
+    utter_df %>%
+      mutate(
+        date = ymd_hms(Timestamp) %>% # change the date format
+          strftime(format = "%d/%b/%Y")
+      ) %>%
+      group_by(Dialogue_ID..Annonymised.) %>% # groupby ID
+      summarise(
+        no_QA_pair = n()/2, # Q-A pairs is equal to (Q+A)/2
+        no_disct_days = n_distinct(date) # get the number of distinct days
+      ) %>%
+      mutate(
+        no_QA_days = round(no_QA_pair/ no_disct_days, 2) # get the number of QA pairs per day
+      )
+  )
+}
+
+# get the data from the dial_utter dfs
+dial_utter_QA_days_weight_tr <- QA_days_weight_feat_eng_func(dial_utter_tr)
+dial_utter_QA_days_weight_ts <- QA_days_weight_feat_eng_func(dial_utter_ts)
+dial_utter_QA_days_weight_vl <- QA_days_weight_feat_eng_func(dial_utter_vl)
+
+# Average answer text length and question text length.
+ave_txt_length_feat_eng_func <- function(utter_df){
+  return(
+    utter_df %>%
+      mutate(text_length = nchar(Utterance_text)) %>% # calculate the text length
+      group_by(
+        Dialogue_ID..Annonymised., 
+        Interlocutor..either.Chatbot.or.Student.
+      ) %>% # groupby ID and chatbot or student
+      summarise(ave_text_length = mean(text_length)) %>% # get the mean of text_length
+      pivot_wider(
+        names_from = Interlocutor..either.Chatbot.or.Student., 
+        values_from = ave_text_length
+        ) %>% # make the chatbot or student into a column name
+      rename(
+        mean_txt_lngth_student = Student,
+        mean_txt_lngth_chatbot = Chatbot
+      ) %>%
+      mutate( # if there are ID that doesnt have either of Chatbot or ask 
+        mean_txt_lngth_student = ifelse(is.na(mean_txt_lngth_student), 0, mean_txt_lngth_student),
+        mean_txt_lngth_chatbot = ifelse(is.na(mean_txt_lngth_chatbot), 0, mean_txt_lngth_chatbot)
+      )
+  )
+}
+
+# get the data from the dial_utter dfs
+ave_utter_tr <- ave_txt_length_feat_eng_func(dial_utter_tr)
+ave_utter_ts <- ave_txt_length_feat_eng_func(dial_utter_ts)
+ave_utter_vl <- ave_txt_length_feat_eng_func(dial_utter_vl)
+
+# join to the dial_useful dfs
+dial_useful_tr <- dial_useful_tr %>%
+  inner_join(
+    dial_utter_Q_A_tr,
+    by = c("Dialogue_ID" = "Dialogue_ID..Annonymised.")
+  ) %>%
+  inner_join(
+    dial_utter_QA_days_weight_tr,
+    by = c("Dialogue_ID" = "Dialogue_ID..Annonymised.")
+  ) %>%
+  inner_join(
+    ave_utter_tr,
+    by = c("Dialogue_ID" = "Dialogue_ID..Annonymised.")
+  )
+head(dial_useful_tr)
+
+dial_useful_ts <- dial_useful_ts %>%
+  inner_join(
+    dial_utter_Q_A_ts,
+    by = c("Dialogue_ID" = "Dialogue_ID..Annonymised.")
+  ) %>%
+  inner_join(
+    dial_utter_QA_days_weight_ts,
+    by = c("Dialogue_ID" = "Dialogue_ID..Annonymised.")
+  ) %>%
+  inner_join(
+    ave_utter_ts,
+    by = c("Dialogue_ID" = "Dialogue_ID..Annonymised.")
+  )
+
+dial_useful_vl <- dial_useful_vl %>%
+  inner_join(
+    dial_utter_Q_A_vl,
+    by = c("Dialogue_ID" = "Dialogue_ID..Annonymised.")
+  ) %>%
+  inner_join(
+    dial_utter_QA_days_weight_vl,
+    by = c("Dialogue_ID" = "Dialogue_ID..Annonymised.")
+  ) %>%
+  inner_join(
+    ave_utter_vl,
+    by = c("Dialogue_ID" = "Dialogue_ID..Annonymised.")
+  )
+```
+Let's get the common words as a features.
+```{r feature engineering common words}
+text_preprocessed_func <- function(text_col) {
+  text_token <- Corpus(VectorSource(text_col))
+  # remove stop words
+  text_token <- tm_map(text_token, removeWords, stopwords("en")) 
+  # remove punctuation
+  text_token <- tm_map(text_token, removePunctuation) 
+  # remove all numbers
+  text_token <- tm_map(text_token, removeNumbers)
+  # remove redundant spaces
+  text_token <- tm_map(text_token, stripWhitespace) 
+  # case normalisation
+  text_token <- tm_map(text_token, content_transformer(tolower))
+  
+  # Define a function to lemmatise the text
+  lemmatise_text <- function(text) {
+    lemmatised <- lemmatize_strings(text)
+    return(lemmatised)
+  }
+  
+  # Apply lemmatisation to the corpus
+  text_token_lemmatized <- tm_map(text_token, content_transformer(lemmatise_text))
+  
+  #  Create a matrix which its rows are the documents and columns are the words.
+  text_token_uni_dtm <- DocumentTermMatrix(text_token_lemmatized)
+  
+  # convert to data frame
+  text_matrix <- as.data.frame(as.matrix(text_token_uni_dtm))
+  # make sure the colnames are valid
+  colnames(text_matrix) <- make.names(colnames(text_matrix))
+  
+  return(text_matrix)
+}
+
+dialogue_dial_utter_tr_df <- dial_utter_tr %>%
+  group_by(Dialogue_ID..Annonymised.) %>%
+  summarise(combined_text = paste(Utterance_text, collapse = " "))
+
+dial_useful_tr <- dial_useful_tr %>%
+  inner_join(
+    dialogue_dial_utter_tr_df,
+    by = c("Dialogue_ID" = "Dialogue_ID..Annonymised.")
+  )
+tf_idf_tr <- text_preprocessed_func(dial_useful_tr$combined_text)
+
+# Calculate the sum of each column
+column_sums <- colSums(tf_idf_tr)
+
+# Get the names of the top 10 columns with the highest sums
+top_5_columns <- names(sort(column_sums, decreasing = TRUE)[1:5])
+
+# Subset the data frame to keep only the top 10 columns
+tf_idf_top_5_tr <- tf_idf_tr[, top_5_columns]
+
+dialogue_dial_utter_ts_df <- dial_utter_ts %>%
+  group_by(Dialogue_ID..Annonymised.) %>%
+  summarise(combined_text = paste(Utterance_text, collapse = " "))
+
+dialogue_dial_utter_vl_df <- dial_utter_vl %>%
+  group_by(Dialogue_ID..Annonymised.) %>%
+  summarise(combined_text = paste(Utterance_text, collapse = " "))
+
+dial_useful_ts <- dial_useful_ts %>%
+  inner_join(
+    dialogue_dial_utter_ts_df,
+    by = c("Dialogue_ID" = "Dialogue_ID..Annonymised.")
+  )
+
+dial_useful_vl <- dial_useful_vl %>%
+  inner_join(
+    dialogue_dial_utter_vl_df,
+    by = c("Dialogue_ID" = "Dialogue_ID..Annonymised.")
+  )
+
+tf_idf_ts <- text_preprocessed_func(dial_useful_ts$combined_text)
+tf_idf_top_5_ts <- tf_idf_ts[, top_5_columns]
+
+tf_idf_vl <- text_preprocessed_func(dial_useful_vl$combined_text)
+tf_idf_top_5_vl <- tf_idf_vl[, top_5_columns]
+
+dial_useful_tr <- cbind(dial_useful_tr, tf_idf_top_5_tr)
+dial_useful_ts <- cbind(dial_useful_ts, tf_idf_top_5_ts)
+dial_useful_vl <- cbind(dial_useful_vl, tf_idf_top_5_vl)
+
+dial_useful_tr <- dial_useful_tr %>% select(-combined_text)
+dial_useful_ts <- dial_useful_ts %>% select(-combined_text)
+dial_useful_vl <- dial_useful_vl %>% select(-combined_text)
+
+head(dial_useful_tr)
+head(dial_useful_ts)
+head(dial_useful_vl)
+```
+
+For question number one, I'm going to choose:
+1. no_QA_pair
+
+2. mean_txt_lngth_chatbot
+
+Let's construct two boxplots from the training data for the usefulness_score (1 or 2) and (4 or 5) from those features.
+```{r boxplots no_QA_pair}
+# filter the Usefulness_score == 1 or 2
+dial_useful_tr_filtered_1or2 <- dial_useful_tr %>%
+  filter(Usefulness_score == 1 | Usefulness_score == 2) %>%
+  select(Usefulness_score, no_QA_pair)
+head(dial_useful_tr_filtered_1or2)
+
+ggplot(dial_useful_tr_filtered_1or2, aes(x = factor(Usefulness_score), y = no_QA_pair)) +
+  geom_boxplot() +
+  labs(title = "Number of QA Pairs vs Usefulness Score",
+       x = "Usefulness Score",
+       y = "Number of QA Pairs")
+
+# filter the Usefulness_score == 4 or 5.
+dial_useful_tr_filtered_4or5 <- dial_useful_tr %>%
+  filter(Usefulness_score == 4 | Usefulness_score == 5)%>%
+  select(Usefulness_score, no_QA_pair)
+head(dial_useful_tr_filtered_4or5)
+
+ggplot(dial_useful_tr_filtered_4or5, aes(x = factor(Usefulness_score), y = no_QA_pair)) +
+  geom_boxplot() +
+  labs(title = "Number of QA Pairs vs Usefulness Score",
+       x = "Usefulness Score",
+       y = "Number of QA Pairs")
+```
+
+According to the boxplots, the Usefulness Score that has 4 or 5 has a higher number of conversation with FLORA. There are also 2 outliers that we can spot in the Usefulness score for 1 or 2.
+
+```{r boxplots mean_txt_lngth_chatbot}
+# filter the Usefulness_score == 1 or 2
+dial_useful_tr_filtered_1or2 <- dial_useful_tr %>%
+  filter(Usefulness_score == 1 | Usefulness_score == 2) %>%
+  select(Usefulness_score, mean_txt_lngth_chatbot)
+head(dial_useful_tr_filtered_1or2)
+
+ggplot(dial_useful_tr_filtered_1or2, aes(x = factor(Usefulness_score), y = mean_txt_lngth_chatbot)) +
+  geom_boxplot() +
+  labs(title = "Average Answer Text Length vs Usefulness Score",
+       x = "Usefulness Score",
+       y = "Average Answer Text Length")
+
+# filter the Usefulness_score == 4 or 5.
+dial_useful_tr_filtered_4or5 <- dial_useful_tr %>%
+  filter(Usefulness_score == 4 | Usefulness_score == 5)%>%
+  select(Usefulness_score, mean_txt_lngth_chatbot)
+head(dial_useful_tr_filtered_4or5)
+
+ggplot(dial_useful_tr_filtered_4or5, aes(x = factor(Usefulness_score), y = mean_txt_lngth_chatbot)) +
+  geom_boxplot() +
+  labs(title = "Average Answer Text Length vs Usefulness Score",
+       x = "Usefulness Score",
+       y = "Average Answer Text Length")
+```
+The second box plot indicates an outlier, it doesnt make any sense that a usefull score of 5 comes from a very low average text length. This needs to be explore further later.
+
+Exclude my own dialogue.
+```{r search for my dialogue}
+my_dialogue_id <- 1155
+
+my_dialogue_id %in% dial_useful_tr$Dialogue_ID
+
+my_dialogue_id %in% dial_useful_vl$Dialogue_ID
+```
+My dialogue is in the validation data. Let's remove it.
+```{r remove my own dialogue id}
+my_dialogue_data_useful <- dial_useful_vl %>%
+  filter(Dialogue_ID == my_dialogue_id)
+my_dialogue_data_useful
+
+my_dialogue_data_utter <- dial_utter_vl %>%
+  filter(Dialogue_ID..Annonymised. == my_dialogue_id)
+my_dialogue_data_utter
+
+dial_useful_vl <- dial_useful_vl %>%
+  filter(Dialogue_ID != my_dialogue_id)
+my_dialogue_id %in% dial_useful_vl$Dialogue_ID
+
+dial_utter_vl <- dial_utter_vl %>%
+  filter(Dialogue_ID..Annonymised. != my_dialogue_id)
+my_dialogue_id %in% dial_utter_vl$Dialogue_ID..Annonymised.
+```
+
+## Question 2
+For this question I am going to choose Decision Tree.
+```{r Decision Tree}
+set.seed(42)
+model1 <- rpart(Usefulness_score ~ ., data = subset(dial_useful_tr, select = -Dialogue_ID))
+rpart.plot(model1)
+```
+Let's predict the value using the validation data.
+```{r predict values}
+pred_values_tr <- predict(model1, dial_useful_tr)
+pred_values <- predict(model1, dial_useful_vl)
+```
+Let's evaluate the model.
+```{r evaluation}
+# function for rmse
+rmse <-function(actual, predicted) {
+  return(
+    sqrt(mean((as.numeric(actual) - as.numeric(predicted))^2))
+  )
+}
+
+# evaluation function
+evaluation_func <- function(model){
+  pred_values_tr <- predict(model, dial_useful_tr)
+  pred_values <- predict(model, dial_useful_vl)
+  
+  rmse_tr <- rmse(dial_useful_tr$Usefulness_score, pred_values_tr)
+  print(
+    paste(
+      "This is the RMSE of the training dataset: ",
+      rmse_tr
+    )
+  )
+  
+  rmse_vl <- rmse(dial_useful_vl$Usefulness_score, pred_values)
+  print(
+    paste(
+      "This is the RMSE of the validation dataset: ",
+      rmse_vl
+    )
+)
+}
+
+evaluation_func(model1)
+```
+
+## Question 3
+First let's see the importance of each feature.
+```{r feature imporatance}
+model1
+model1$variable.importance
+unique(model1$frame$var[model1$frame$var != "<leaf>"])
+```
+We can see here that the features that are important are only:
+1. no_QA_pair
+
+2. no_chatbot
+
+3. no_student
+
+4. project
+
+5. science
+
+6. datum
+
+7. no_QA_days
+
+8. no_disct_days
+
+And the model only use:
+1. no_disct_days
+
+2. datum
+
+3. no_QA_days
+
+4. science
+
+5. no_chatbot
+
+Let's check the correlation among the features.
+```{r correlation}
+# let's check the data first
+head(dial_useful_tr)
+
+# according to the data, the most suitable correlation test is the Pearson Correlation.
+cor_matrix <- cor(
+  dial_useful_tr %>% select(-Dialogue_ID, -Usefulness_score),
+  method = "pearson"
+)
+
+corrplot(cor_matrix, method = "circle", type = "upper", order = "hclust",
+         tl.col = "black", tl.srt = 45, addCoef.col = "black", number.cex = 0.7)
+```
+
+If we look at the correlation result, there are number of features that are used by the model which have high correlation:
+1. project - datum
+
+2. project - science
+
+3. project - datum
+
+4. no_chatbot - no_QA_days
+
+5. no_chatbot - no_disct_days
+
+Looking at the RMSEs from the train and validation dataset, there is a probability that the model is overfit, therefore it is too complex. Thus, we need to remove some of the unnecessary features.
+
+Since no_chatbot and no_QA_days are highly correlated, we are going to choose no_chatbot because it is more important than no_QA_days.
+
+We are going to keep both no_chatbot and no_disct_days even though the correlation is pretty high. This is because both are important features according to the model.
+
+The confirmed features that are going to be used are:
+1. either project, datum, and science 
+
+2. no_disct_days
+
+3. no_chatbot
+
+Since the project-datum-model are highly correlated, let's try few combination of the model:
+1. Use only either project, datum, science
+
+2. Drop either project, datum, science
+```{r model feature testing}
+# select the wanted features
+reduced_useful_tr <- dial_useful_tr %>%
+  select(project, datum, science, no_disct_days, no_chatbot, mean_txt_lngth_student, Usefulness_score)
+
+# Create function to calculate the model
+DT_model_func <- function(df) {
+  DT_model <- rpart(Usefulness_score ~ ., data = df)
+  evaluation_func(DT_model)
+}
+
+set.seed(42)
+# features that we are going to try
+try_features <- c("project", "datum", "science")
+
+# looping the features to drop
+for(i in try_features){
+  # only selecting part of either features
+  print(
+    paste0("This model only select ", i)
+  )
+  # select the data
+  reduced_select_data <- reduced_useful_tr %>%
+    select(all_of(i), no_disct_days, no_chatbot, mean_txt_lngth_student, Usefulness_score)
+  # create the model
+  DT_model_func(reduced_select_data)
+  
+  # dropping part of either features
+  print(
+    paste0("This model drop ", i)
+  )
+  # select the data
+  reduced_drop_data <- reduced_useful_tr %>%
+    select(-all_of(i))
+  # create the model
+  DT_model_func(reduced_drop_data)
+}
+```
+From the result, we can conclude that the most not overfitting model with good RMSE is "only select datum", because it is generelized well.
+
+Let's try to predict with the model.
+```{r prediction DT reduced model}
+# let's reduce the model first
+reduced_useful_tr <- dial_useful_tr %>%
+  select(datum, no_disct_days, no_chatbot, Usefulness_score)
+# create the model
+DT_reduced_model <- rpart(Usefulness_score ~ ., data = reduced_useful_tr)
+# predict the model
+pred_values_tr <- predict(DT_reduced_model, dial_useful_tr)
+pred_values <- predict(DT_reduced_model, dial_useful_vl)
+
+print("prediction for training data")
+table(pred_values_tr)
+print("actual values for the training data")
+table(dial_useful_tr$Usefulness_score)
+
+print("prediction for the validation data")
+table(pred_values)
+print("actual values for the validation data")
+table(dial_useful_vl$Usefulness_score)
+```
+As we can see the dataset is biased towards the Usefulness_score of 3,4, and 5. That is why the model does not predict Usefulness_score for values 1 and less 2.
+
+Let's try to resampled the dataset using bootstrapping, at least the number of Usefulness_score for 1 and 2 should be equal to the average of 3,4, and 5.
+```{r bootstrapping}
+# get the majority and minority data
+majority <- reduced_useful_tr %>%
+  filter(Usefulness_score %in% c(3,4,5))
+minority_1 <- reduced_useful_tr[reduced_useful_tr$Usefulness_score == 1,]
+minority_2 <- reduced_useful_tr[reduced_useful_tr$Usefulness_score == 2,]
+
+# random sampling the minority
+set.seed(42)
+bootstrap_minority_1 <- minority_1[sample(nrow(minority_1), size = round(nrow(majority)/3), replace = TRUE), ]
+bootstrap_minority_2 <- minority_2[sample(nrow(minority_2), size = round(nrow(majority)/3), replace = TRUE), ]
+
+# combine the rows
+balanced_reduced_useful_tr <- rbind(majority, bootstrap_minority_1, bootstrap_minority_2)
+table(balanced_reduced_useful_tr$Usefulness_score)
+```
+
+Let's check our new DT model.
+```{r prediction DT oversample model}
+# create model
+DT_oversampling_model <- rpart(Usefulness_score ~ ., data = balanced_reduced_useful_tr)
+evaluation_func(DT_oversampling_model)
+
+# predict model
+pred_values_tr <- predict(DT_oversampling_model, dial_useful_tr)
+pred_values <- predict(DT_oversampling_model, dial_useful_vl)
+
+print("prediction for training data")
+table(pred_values_tr)
+
+print("prediction for the validation data")
+table(pred_values)
+```
+Now, the model predicts Usefulness_score around 1. The RMSE is worse than the previous model but still acceptable. However, I believe that the distribution of the Usefulness_score is biased towards 3,4, and 5. It can be seen from the same distribution that happens in training and validation data. Thus, the DT_reduced_model is better.
+
+Let's do a cross validation and search grid for the Decision Tree.
+```{r CV decision tree, warning=FALSE}
+# set the cross validation
+train_control <- trainControl(method = "cv", number = 5)
+
+# Define the grid of hyperparameters to search
+tune_grid <- expand.grid(
+  cp = seq(0.01, 0.1, by = 0.01) # Complexity parameter (cp) grid
+)
+
+# Set the seed for reproducibility
+set.seed(42)
+
+# Perform the grid search with cross-validation
+dt_cv_model <- train(
+  Usefulness_score ~ ., 
+  data = reduced_useful_tr, 
+  method = "rpart", 
+  trControl = train_control,
+  tuneGrid = tune_grid
+)
+
+# Print the best model and the results
+print(dt_cv_model)
+
+# Evaluate the best model (assuming evaluation_func is defined)
+evaluation_func(dt_cv_model)
+```
+The result of the dt_cv_model is able to generelized better than the DT_reduced_model, but it is still underfitting.
+
+After looking at the simple model, let's try more complex model, which is Random forest with the reduced dataset.
+```{r simple random Forest, warning=FALSE}
+# random forest model
+set.seed(42)
+rf_simple_model <- randomForest(
+  Usefulness_score ~ ., 
+  data = reduced_useful_tr,
+  importance = TRUE
+)
+rf_simple_model
+importance(rf_simple_model)
+
+# evaluate the model
+evaluation_func(rf_simple_model)
+```
+
+Looking at the result of the accuracy, it could be seen that the model is now overfitting. Thus, let's try cross validation technique.
+Since the number of rows is 139 and the model is overfitting, I am choosing 5-Fold cross validation and set the ntree = 100 to reduce the overfitting.
+```{r cross validation, warning=FALSE}
+set.seed(42)
+rf_cv_model <- train(
+  Usefulness_score ~ ., 
+  data = reduced_useful_tr, 
+  method = "rf", 
+  trControl = train_control,
+  ntree = 100
+)
+
+rf_cv_model
+evaluation_func(rf_cv_model)
+```
+Okay, looking at the RMSE, the model is too overfitting. Let's try to tune the hyperparameters by using grid search.
+```{r grid search random forest, warning=FALSE}
+# Define the grid of hyperparameters to search
+tune_grid <- expand.grid(
+  mtry = c(2, 4, 6) # Number of variables randomly sampled as candidates at each split
+)
+
+# Set the seed for reproducibility
+set.seed(42)
+# Perform the grid search with cross-validation, using RMSE as the metric
+rf_cv_model_tuned <- train(
+  Usefulness_score ~ ., 
+  data = reduced_useful_tr, 
+  method = "rf", 
+  trControl = train_control,
+  tuneGrid = tune_grid,
+  metric = "RMSE", # Specify RMSE as the evaluation metric
+  ntree = 100 # Specify the number of trees to grow
+)
+
+# Print the best model and the results
+print(rf_cv_model_tuned)
+
+# Evaluate the model (assuming evaluation_func is defined)
+evaluation_func(rf_cv_model_tuned)
+```
+The random forest suggests that the model is always overfit. Let's try other models.
+
+Let's try SVM, it is better to start with a simple model first to know what is the main problem of the overall model.
+```{r simple SVM}
+# Train the SVM regression model
+svm_model <- svm(Usefulness_score ~ ., data = reduced_useful_tr, type = "eps-regression")
+# Print the model summary
+summary(svm_model)
+evaluation_func(svm_model)
+```
+Looking at the RMSE, the model is suitable with the dataset. It is unusual for RMSE validation to be less than the training dataset. There are several potential issues:
+1. Small sample size
+A small validation set can lead to an RMSE that doesn't accurately reflect the model's performance on unseen data. This could make the validation RMSE appear artificially low.
+
+2. Randomness
+Random splits in the data can sometimes produce a validation set that is easier to predict than the training set. This is more common when the dataset is not very large or not well shuffled.
+
+Let's try the cross validation with hypermeter tuning for the SVM model.
+```{r SVM cv}
+# Define the grid of hyperparameters to search
+tune_grid <- expand.grid(
+  sigma = 2^(-15:-1),    # Expanded range for sigma
+  C = 2^(-5:15)          # Expanded range for C
+)
+
+# Set the seed for reproducibility
+set.seed(42)
+
+# Train the model
+svm_cv_model <- train(
+  Usefulness_score ~ ., 
+  data = reduced_useful_tr, 
+  method = "svmRadial", 
+  trControl = train_control,
+  tuneGrid = tune_grid,
+  metric = "RMSE"
+)
+
+# Print the best model and the results
+print(svm_cv_model)
+
+# Evaluate the model (assuming evaluation_func is defined)
+evaluation_func(svm_cv_model)
+```
+The difference between the svm_model and the svm_cv_model are minimal. While the svm_cv_model shows a better fit to the training data, the svm_model demonstrates slightly better performance on the validation set.
+
+In this case, the differences are so minor that either model could be considered adequate. If the goal is to prioritize validation performance, you might lean slightly towards the svm_model. However, using cross-validation as done with svm_cv_model generally provides a more robust estimate of model performance.
+
+Conclusion:
+1. The first Decision Tree model is used to decrease the features that are used for the model building. From the features importance we get that datum, no_disct_days, and no_chatbot are sufficient and significant to the models.
+
+2. The distribution of the Usefulness_score proves to be skewed to the values of 3,4, and 5, it makes the oversampling method like bootstrapping is not significant.
+
+3. From model testing and optimization, the Decision Tree proves to be underfit even though the RMSE is adequate. 
+
+4. The Random Forest proves to be always overfitting because the training data is small.
+
+5. SVM and cross-validated SVM prove to be the best model.
+
+Thus, after looking for all of the models, the svm_cv_model shows the best result in terms of RMSE. Therefor, we are going to use this model for the prediction.
+```{r final model}
+# getting the reduced validation data
+reduced_useful_vl <- dial_useful_vl %>% select(colnames(reduced_useful_tr))
+# combine it with the reduced_useful_tr
+reduced_useful_final <- rbind(reduced_useful_tr, reduced_useful_vl)
+
+# train the model
+final_model <- train(
+  Usefulness_score ~ ., 
+  data = reduced_useful_final, 
+  method = "svmRadial", 
+  trControl = train_control,
+  tuneGrid = tune_grid,
+  metric = "RMSE"
+)
+```
+
+## Q4
+Let's predict my dialgue using the final_model.
+```{r preprocessed my dialgue}
+# preprocessed my dialogue
+reduced_useful_my_diag <- my_dialogue_data_useful %>%
+  select(colnames(reduced_useful_tr))
+print(reduced_useful_my_diag)
+
+# predict my Usefulness_score
+my_usefulness_score <- predict(final_model, reduced_useful_my_diag)
+print(my_usefulness_score)
+```
+The prediction score is not the same as what I had answered. This is due to several things:
+1. The dataset is too small, it makes the model generalization not good and it makes the features not compatible with the model. If the data is big some features might be significant towards the Usefulness_score.
+
+2. The distribution of the Usefulness_score is skewed to values 3,4, and 5, where values = 4 is 42% of the entire dataset. Thus, if the model does not know what to predict it will predict values around 4 to make the RMSE small.
+
+3. My dialogue is an outlier and since the data is too small, there are not many outliers Hence, the model does not have the ability to generalized towards outliers.
+
+## Q5
+Let's predict the unseen dataset which is the dial_useful_ts.
+```{r predict dial_useful_ts}
+# predict the test dataset
+unseen_prediction <- predict(final_model, dial_useful_ts)
+
+# make into df
+unseen_df <- data.frame(Dialogue_ID = dial_useful_ts$Dialogue_ID, Usefullness_score_prediction = unseen_prediction)
+print(unseen_df)
+
+# export the file into a csv file
+write.csv(unseen_df, "Darmadi_34078215_dialogue_usefulness_test.csv", row.names = FALSE)
+```
